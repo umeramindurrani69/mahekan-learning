@@ -1,32 +1,39 @@
 # mahekan-learning
 
-Cambridge CS 9618 study app — all chapters, practice questions, diagram questions, and AI Examiner.
+Cambridge CS 9618 study app — all chapters, practice questions, diagram questions, and Practice Examiner.
+
+## Practice Examiner (default — unlimited)
+
+Works on **Vercel with no API key**. Questions and mark schemes come from the built-in chapter bank (hundreds of CAIE-style items). Marking compares your answer to the official mark scheme points.
+
+No rate limits. No billing.
+
+## Optional: Ollama (local PC only)
+
+[Ollama](https://ollama.com) runs AI on your computer for free with no cloud quotas. It **cannot** run on Vercel.
+
+1. Install Ollama → `ollama pull llama3.2`
+2. Copy `.env.example` to `.env.local` and set:
+   - `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+   - `OLLAMA_MODEL=llama3.2`
+3. `npm start` → enable **Use Ollama** in Practice Examiner
 
 ## Local development
 
 ```bash
 npm install
-cp .env.example .env.local
-# Edit .env.local and set ANTHROPIC_API_KEY (needed for AI Examiner)
 npm start
 ```
 
 ## Deploy on Vercel
 
-1. Push this repo to GitHub.
-2. Import the project in [Vercel](https://vercel.com/new).
-3. Vercel will detect **Create React App** (`npm run build`, output `build/`).
-4. Add an environment variable:
-   - **Name:** `ANTHROPIC_API_KEY`
-   - **Value:** your [Anthropic API key](https://console.anthropic.com/)
-5. Deploy.
-
-The AI Examiner calls `/api/anthropic` on your domain so the API key stays on the server and is never exposed in the browser.
+1. Import [umeramindurrani69/mahekan-learning](https://github.com/umeramindurrani69/mahekan-learning)
+2. Deploy — **no environment variables required**
+3. Practice Examiner works immediately on the live site
 
 ## Scripts
 
-| Command        | Description              |
-|----------------|--------------------------|
-| `npm start`    | Development server       |
-| `npm run build`| Production build         |
-| `npm test`     | Run tests                |
+| Command         | Description        |
+|-----------------|--------------------|
+| `npm start`     | Development server |
+| `npm run build` | Production build   |

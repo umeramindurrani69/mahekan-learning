@@ -1,32 +1,23 @@
-// Dev-only proxy so `npm start` matches Vercel's /api/anthropic route.
+const { generateText } = require("../lib/ai");
+
 module.exports = function (app) {
-  app.post("/api/anthropic", (req, res) => {
+  app.get("/api/ai-status", (req, res) => {
+    res.json({
+      ollama: Boolean(process.env.OLLAMA_BASE_URL),
+      model: process.env.OLLAMA_MODEL || "llama3.2",
+    });
+  });
+
+  app.post("/api/ai", (req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", async () => {
-      const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) {
-        res.status(500).json({
-          error:
-            "ANTHROPIC_API_KEY is not configured. Add it to .env.local for local dev.",
-        });
-        return;
-      }
-
       try {
-        const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: Buffer.concat(chunks).toString(),
-        });
-        const data = await upstream.json();
-        res.status(upstream.status).json(data);
-      } catch {
-        res.status(500).json({ error: "Failed to reach Anthropic API" });
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        const text = await generateText(body.prompt, body.max_tokens || 1024);
+        res.status(200).json({ text });
+      } catch (err) {
+        res.status(500).json({ error: err.message || "AI request failed" });
       }
     });
   });

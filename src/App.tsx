@@ -2,7 +2,7 @@
 //  Cambridge CS 9618 – Full Study App
 //  All 29 chapters · Diagram Qs · Mark-scheme Qs · AI Examiner
 // ═══════════════════════════════════════════════════════
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ─── COMPLETE CHAPTER DATABASE ────────────────────────────────────────────────
 const CHAPTERS = [
@@ -1919,7 +1919,119 @@ const Ico = ({ d, size = 16 }) => (
   </svg>
 );
 
-// ─── AI EXAMINER ─────────────────────────────────────────────────────────────
+// ─── PRACTICE EXAMINER (built-in bank — unlimited, no API) ───────────────────
+function buildQuestionPool(chapter) {
+  const pool = [];
+  (chapter.questions || []).forEach((item, i) => {
+    pool.push({
+      id: `q-${i}`,
+      question: item.q,
+      marks: item.marks || 2,
+      hint: item.explanation || "",
+      modelAnswer: item.a,
+      examTip: item.explanation || "",
+      questionType: "practice",
+    });
+  });
+  (chapter.diagramQuestions || []).forEach((item, i) => {
+    pool.push({
+      id: `d-${i}`,
+      question: item.q,
+      marks: item.marks || 2,
+      hint: item.diagramDesc || item.explanation || "",
+      modelAnswer: item.a,
+      examTip: item.examNote || "",
+      questionType: "diagram",
+    });
+  });
+  return pool;
+}
+
+function pickBuiltInQuestion(chapter, usedIds) {
+  const pool = buildQuestionPool(chapter);
+  if (!pool.length) {
+    throw new Error("No questions in this chapter.");
+  }
+  let candidates = pool.filter((p) => !usedIds.has(p.id));
+  if (!candidates.length) {
+    usedIds.clear();
+    candidates = pool;
+  }
+  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  usedIds.add(picked.id);
+  return picked;
+}
+
+function markBuiltInAnswer(qData, studentAnswer) {
+  const max = qData.marks || 2;
+  const scheme = (qData.modelAnswer || "")
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 8);
+  const student = studentAnswer.toLowerCase();
+  const improve = [];
+  const wellDone = [];
+  let hits = 0;
+
+  for (const line of scheme) {
+    const words = line.toLowerCase().match(/\b[a-z0-9]{5,}\b/g) || [];
+    const keys = [...new Set(words)].slice(0, 4);
+    const matched =
+      keys.length === 0 ||
+      keys.filter((k) => student.includes(k)).length >=
+        Math.ceil(keys.length * 0.4);
+    if (matched) {
+      hits++;
+      if (wellDone.length < 1) wellDone.push(line.slice(0, 70));
+    } else if (improve.length < 3) {
+      improve.push(line.slice(0, 90));
+    }
+  }
+
+  const total = Math.max(scheme.length, 1);
+  const ratio = hits / total;
+  let awarded = Math.round(ratio * max);
+  if (studentAnswer.trim().length > 20 && awarded === 0) awarded = 1;
+  awarded = Math.min(max, Math.max(0, awarded));
+
+  const pct = max ? awarded / max : 0;
+  const grade =
+    pct >= 0.85
+      ? "Excellent"
+      : pct >= 0.65
+      ? "Good"
+      : pct >= 0.4
+      ? "Partial"
+      : "Needs Work";
+
+  return {
+    awarded,
+    max,
+    grade,
+    feedback:
+      ratio >= 0.7
+        ? "Strong answer — you hit most points from the mark scheme. Compare with the model answer below."
+        : ratio >= 0.4
+        ? "Reasonable attempt. Add the missing technical points from the model answer."
+        : "Review the model answer and note the key terms and steps you did not include.",
+    wellDone: wellDone[0] ? `You addressed: ${wellDone[0]}` : "",
+    improve: improve.length
+      ? improve
+      : ["Read the full model answer and learn the points you missed."],
+  };
+}
+
+async function callOllama(prompt, maxTokens) {
+  const r = await fetch("/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, max_tokens: maxTokens }),
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Ollama request failed");
+  return (d.text || "").replace(/```json|```/g, "").trim();
+}
+
 function AIExaminer({ chapter }) {
   const [state, setState] = useState("idle");
   const [qData, setQData] = useState(null);
@@ -1927,47 +2039,46 @@ function AIExaminer({ chapter }) {
   const [feedback, setFeedback] = useState(null);
   const [session, setSession] = useState({ done: 0, earned: 0, total: 0 });
   const [qNum, setQNum] = useState(0);
+  const [aiError, setAiError] = useState(null);
+  const [ollamaReady, setOllamaReady] = useState(false);
+  const [useOllama, setUseOllama] = useState(false);
+  const usedIds = useRef(new Set());
+
+  useEffect(() => {
+    fetch("/api/ai-status")
+      .then((r) => r.json())
+      .then((d) => setOllamaReady(Boolean(d.ollama)))
+      .catch(() => setOllamaReady(false));
+  }, []);
 
   const generate = async () => {
     setState("loading");
     setAnswer("");
     setFeedback(null);
+    setAiError(null);
+
+    if (useOllama && ollamaReady) {
+      try {
+        const txt = await callOllama(
+          `You are a Cambridge 9618 examiner. Chapter: "${chapter.title}". Topics: ${chapter.topics.join(", ")}. Generate ONE exam question. JSON only: {"question":"...","marks":4,"hint":"...","modelAnswer":"...","examTip":"...","questionType":"practice"}`,
+          1000
+        );
+        setQData(JSON.parse(txt));
+        setQNum((n) => n + 1);
+        setState("question");
+        return;
+      } catch (e) {
+        setAiError(e.message || "Ollama failed — using built-in questions.");
+      }
+    }
+
     try {
-      const r = await fetch("/api/anthropic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: `You are a Cambridge 9618 A/AS Level Computer Science examiner from Pakistan.
-Chapter: "${chapter.title}"
-Topics: ${chapter.topics.join(", ")}
-
-Generate ONE exam-style question. Vary the style each time:
-- Mix: define, explain, state differences, calculate, trace code, write pseudocode, describe a scenario
-- Include mark allocation [X marks] — use 2, 3, 4, or 6 marks only
-- Make it genuinely challenging but fair for A Level standard
-- For pseudocode questions, specify CAIE syntax
-
-Respond ONLY in valid JSON (no markdown, no backticks):
-{"question":"...","marks":4,"hint":"brief hint","modelAnswer":"full mark-scheme style answer","examTip":"one exam tip","questionType":"define|explain|calculate|trace|pseudocode|compare|describe"}`,
-            },
-          ],
-        }),
-      });
-      const d = await r.json();
-      const txt = d.content
-        .map((b) => b.text || "")
-        .join("")
-        .replace(/```json|```/g, "")
-        .trim();
-      setQData(JSON.parse(txt));
+      await new Promise((r) => setTimeout(r, 200));
+      setQData(pickBuiltInQuestion(chapter, usedIds.current));
       setQNum((n) => n + 1);
       setState("question");
-    } catch {
+    } catch (e) {
+      setAiError(e.message || "Could not load a question.");
       setState("idle");
     }
   };
@@ -1975,47 +2086,37 @@ Respond ONLY in valid JSON (no markdown, no backticks):
   const submit = async () => {
     if (!answer.trim()) return;
     setState("marking");
-    try {
-      const r = await fetch("/api/anthropic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 800,
-          messages: [
-            {
-              role: "user",
-              content: `CAIE examiner marking a student answer.
-Question: ${qData.question}
-Max marks: ${qData.marks}
-Mark scheme: ${qData.modelAnswer}
-Student answer: ${answer}
+    setAiError(null);
 
-Award marks fairly using CAIE marking principles (credit equivalent alternatives, award marks for correct points even if phrasing differs).
-
-JSON only (no markdown):
-{"awarded":2,"max":${qData.marks},"grade":"Excellent|Good|Partial|Needs Work","feedback":"2-3 sentences of examiner feedback","wellDone":"specific thing done well or empty string","improve":["point missed 1","point missed 2"]}`,
-            },
-          ],
-        }),
-      });
-      const d = await r.json();
-      const txt = d.content
-        .map((b) => b.text || "")
-        .join("")
-        .replace(/```json|```/g, "")
-        .trim();
-      const fb = JSON.parse(txt);
-      setFeedback(fb);
-      setSession((s) => ({
-        done: s.done + 1,
-        earned: s.earned + fb.awarded,
-        total: s.total + fb.max,
-      }));
-      setState("feedback");
-    } catch {
-      setState("question");
+    if (useOllama && ollamaReady && qData && !qData.id) {
+      try {
+        const txt = await callOllama(
+          `Mark this CAIE answer. Question: ${qData.question}. Max: ${qData.marks}. Scheme: ${qData.modelAnswer}. Student: ${answer}. JSON only: {"awarded":2,"max":${qData.marks},"grade":"Good","feedback":"...","wellDone":"...","improve":["..."]}`,
+          800
+        );
+        const fb = JSON.parse(txt);
+        setFeedback(fb);
+        setSession((s) => ({
+          done: s.done + 1,
+          earned: s.earned + fb.awarded,
+          total: s.total + fb.max,
+        }));
+        setState("feedback");
+        return;
+      } catch (e) {
+        setAiError(e.message || "Ollama marking failed — using built-in marking.");
+      }
     }
+
+    await new Promise((r) => setTimeout(r, 150));
+    const fb = markBuiltInAnswer(qData, answer);
+    setFeedback(fb);
+    setSession((s) => ({
+      done: s.done + 1,
+      earned: s.earned + fb.awarded,
+      total: s.total + fb.max,
+    }));
+    setState("feedback");
   };
 
   const gradeColor = (g) =>
@@ -2051,7 +2152,7 @@ JSON only (no markdown):
             fontSize: 15,
           }}
         >
-          ⚡ AI Examiner
+          ⚡ Practice Examiner
         </h3>
         {session.done > 0 && (
           <div
@@ -2075,15 +2176,50 @@ JSON only (no markdown):
         )}
       </div>
 
+      {aiError && (
+        <p
+          style={{
+            color: "#f87171",
+            fontSize: 13,
+            marginBottom: 16,
+            textAlign: "center",
+          }}
+        >
+          {aiError}
+        </p>
+      )}
+
       {state === "idle" && (
         <div style={{ textAlign: "center", padding: "24px 0" }}>
-          <p style={{ color: "#475569", marginBottom: 20, fontSize: 14 }}>
-            AI generates unique exam-standard questions & marks your answers
-            using CAIE marking criteria
+          <p style={{ color: "#475569", marginBottom: 12, fontSize: 14 }}>
+            Unlimited practice from this chapter&apos;s exam question bank —
+            no API key, no quotas
           </p>
-          <button onClick={generate} style={btnStyle("#7c3aed", "#a855f7")}>
-            Generate Question →
-          </button>
+          {ollamaReady && (
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                color: "#94a3b8",
+                fontSize: 12,
+                marginBottom: 16,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={useOllama}
+                onChange={(e) => setUseOllama(e.target.checked)}
+              />
+              Use Ollama (local PC only)
+            </label>
+          )}
+          <div>
+            <button onClick={generate} style={btnStyle("#7c3aed", "#a855f7")}>
+              Generate Question →
+            </button>
+          </div>
         </div>
       )}
 
